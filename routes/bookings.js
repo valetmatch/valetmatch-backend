@@ -5,6 +5,76 @@ const authMiddleware = require('../middleware/auth');
 
 const router = express.Router();
 
+// CREATE BOOKING (PUBLIC - NO AUTH REQUIRED)
+router.post('/public',
+  [
+    body('customerEmail').isEmail().normalizeEmail(),
+    body('customerPhone').optional().trim(),
+    body('valeterId').isInt(),
+    body('postcode').trim().notEmpty(),
+    body('bookingDate').notEmpty(),
+    body('bookingTime').notEmpty(),
+    body('vehicleSize').isIn(['small', 'medium', 'large', 'van']),
+    body('serviceTier').isIn(['budget', 'standard', 'premium']),
+    body('price').isNumeric()
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { customerEmail, customerPhone, valeterId, postcode, bookingDate, bookingTime, vehicleSize, serviceTier, price } = req.body;
+
+      // Get or create customer
+      let customer = await db.query('SELECT id FROM customers WHERE email = $1', [customerEmail]);
+      let customerId;
+
+      if (customer.rows.length === 0) {
+        // Create new customer
+        const newCustomer = await db.query(
+          'INSERT INTO customers (email, phone) VALUES ($1, $2) RETURNING id',
+          [customerEmail, customerPhone || null]
+        );
+        customerId = newCustomer.rows[0].id;
+      } else {
+        customerId = customer.rows[0].id;
+      }
+
+      // Insert booking
+      const result = await db.query(
+        `INSERT INTO bookings 
+         (customer_id, valeter_id, postcode, booking_date, booking_time, vehicle_size, service_tier, price, status) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending') 
+         RETURNING *`,
+        [customerId, valeterId, postcode, bookingDate, bookingTime, vehicleSize, serviceTier, price]
+      );
+
+      const booking = result.rows[0];
+
+      // TODO: Send email notifications here
+
+      res.status(201).json({
+        message: 'Booking created successfully',
+        booking: {
+          id: booking.id,
+          valeterId: booking.valeter_id,
+          postcode: booking.postcode,
+          date: booking.booking_date,
+          time: booking.booking_time,
+          service: booking.service_tier,
+          price: parseFloat(booking.price),
+          status: booking.status
+        }
+      });
+    } catch (error) {
+      console.error('Booking creation error:', error);
+      res.status(500).json({ error: 'Failed to create booking', details: error.message });
+    }
+  }
+);
+
 // CREATE BOOKING
 router.post('/',
   authMiddleware(['customer']),
