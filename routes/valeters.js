@@ -1,124 +1,137 @@
 const express = require('express');
-const db = require('../config/database');
-
 const router = express.Router();
+const pool = require('../config/database');
 
-// SEARCH VALETERS BY POSTCODE
+// Search for valeters by postcode and service type
 router.get('/search', async (req, res) => {
   try {
-    const { postcode } = req.query;
+    const { postcode, serviceType } = req.query;
+
+    console.log('🔍 Searching valeters:', { postcode, serviceType });
 
     if (!postcode) {
       return res.status(400).json({ error: 'Postcode is required' });
     }
 
-    // Get approved valeters with their pricing
-    // Changed from 'approved' to 'active' to match our database setup
-    const valetersResult = await db.query(
-      `SELECT id, business_name, rating, total_reviews, postcode, services_offered
-       FROM valeters 
-       WHERE status = 'active'
-       ORDER BY rating DESC
-       LIMIT 20`
-    );
+    // Build the query based on service type
+    let query = `
+      SELECT 
+        v.id,
+        v.business_name,
+        v.rating,
+        v.total_reviews,
+        v.postcode,
+        v.service_types,
+        v.business_address,
+        json_agg(
+          json_build_object(
+            'vehicle_size', vp.vehicle_size,
+            'service_tier', vp.service_tier,
+            'price', vp.price
+          )
+        ) as pricing
+      FROM valeters v
+      LEFT JOIN valeter_pricing vp ON v.id = vp.valeter_id
+      WHERE v.status = 'active'
+    `;
 
-    if (valetersResult.rows.length === 0) {
-      return res.json([]); // Return empty array if no valeters found
+    // Add service type filter if provided
+    const params = [postcode];
+    if (serviceType && (serviceType === 'mobile' || serviceType === 'premises')) {
+      query += ` AND $2 = ANY(v.service_types)`;
+      params.push(serviceType);
     }
 
-    // Get all valeter IDs
-    const valeterIds = valetersResult.rows.map(v => v.id);
+    query += `
+      GROUP BY v.id
+      ORDER BY v.rating DESC, v.total_reviews DESC
+    `;
 
-    // Get all pricing for these valeters
-    const pricingResult = await db.query(
-      `SELECT valeter_id, vehicle_size, service_tier, price
-       FROM valeter_pricing
-       WHERE valeter_id = ANY($1)`,
-      [valeterIds]
-    );
+    const result = await pool.query(query, params);
 
-    // Build pricing lookup object
-    const pricingByValeter = {};
-    pricingResult.rows.forEach(row => {
-      if (!pricingByValeter[row.valeter_id]) {
-        pricingByValeter[row.valeter_id] = {
-          small: {},
-          medium: {},
-          large: {},
-          van: {}
-        };
-      }
-      pricingByValeter[row.valeter_id][row.vehicle_size][row.service_tier] = parseFloat(row.price);
+    // Transform the data to match frontend expectations
+    const valeters = result.rows.map(row => {
+      // Convert pricing array to object structure
+      const prices = {
+        small: {},
+        medium: {},
+        large: {},
+        van: {}
+      };
+
+      row.pricing.forEach(p => {
+        if (p.vehicle_size && p.service_tier) {
+          prices[p.vehicle_size][p.service_tier] = parseFloat(p.price);
+        }
+      });
+
+      return {
+        id: row.id,
+        name: row.business_name,
+        rating: parseFloat(row.rating),
+        reviews: row.total_reviews,
+        distance: '2.5 miles', // TODO: Calculate real distance based on postcodes
+        postcode: row.postcode,
+        serviceTypes: row.service_types,
+        businessAddress: row.business_address,
+        prices: prices
+      };
     });
 
-    // Format response to match frontend expectations
-    const valeters = valetersResult.rows.map(row => ({
-      id: row.id,
-      name: row.business_name,
-      rating: parseFloat(row.rating) || 0,
-      reviews: row.total_reviews || 0,
-      distance: '2.5 miles', // TODO: Calculate real distance based on postcode
-      prices: pricingByValeter[row.id] || {}
-    }));
+    console.log(`✅ Found ${valeters.length} valeters`);
+    
+    res.json({
+      success: true,
+      count: valeters.length,
+      valeters: valeters,
+      serviceType: serviceType || 'all'
+    });
 
-    res.json(valeters);
   } catch (error) {
-    console.error('Search valeters error:', error);
-    res.status(500).json({ error: 'Failed to search valeters' });
+    console.error('❌ Error searching valeters:', error);
+    res.status(500).json({ 
+      error: 'Failed to search valeters',
+      details: error.message 
+    });
   }
 });
 
-// GET VALETER DETAILS
+// Get a single valeter by ID
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const valeterResult = await db.query(
-      `SELECT id, business_name, rating, total_reviews, postcode, services_offered, created_at
-       FROM valeters 
-       WHERE id = $1 AND status = 'active'`,
-      [id]
-    );
+    const result = await pool.query(`
+      SELECT 
+        v.*,
+        json_agg(
+          json_build_object(
+            'vehicle_size', vp.vehicle_size,
+            'service_tier', vp.service_tier,
+            'price', vp.price
+          )
+        ) as pricing
+      FROM valeters v
+      LEFT JOIN valeter_pricing vp ON v.id = vp.valeter_id
+      WHERE v.id = $1
+      GROUP BY v.id
+    `, [id]);
 
-    if (valeterResult.rows.length === 0) {
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Valeter not found' });
     }
 
-    const valeter = valeterResult.rows[0];
-
-    // Get pricing for this valeter
-    const pricingResult = await db.query(
-      `SELECT vehicle_size, service_tier, price
-       FROM valeter_pricing
-       WHERE valeter_id = $1`,
-      [id]
-    );
-
-    // Build pricing object
-    const prices = {
-      small: {},
-      medium: {},
-      large: {},
-      van: {}
-    };
-
-    pricingResult.rows.forEach(row => {
-      prices[row.vehicle_size][row.service_tier] = parseFloat(row.price);
-    });
-
     res.json({
-      id: valeter.id,
-      name: valeter.business_name,
-      rating: parseFloat(valeter.rating) || 0,
-      reviews: valeter.total_reviews || 0,
-      postcode: valeter.postcode,
-      servicesOffered: valeter.services_offered,
-      prices: prices,
-      memberSince: valeter.created_at
+      success: true,
+      valeter: result.rows[0]
     });
+
   } catch (error) {
-    console.error('Get valeter error:', error);
-    res.status(500).json({ error: 'Failed to fetch valeter' });
+    console.error('❌ Error fetching valeter:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch valeter',
+      details: error.message 
+    });
   }
 });
 
