@@ -25,10 +25,12 @@ const limiter = rateLimit({
 app.use('/api/', limiter);
 
 // Routes
+const authRoutes = require('./routes/auth');
 const valeterRoutes = require('./routes/valeters');
 const bookingRoutes = require('./routes/bookings');
 const adminRoutes = require('./routes/admin');
 
+app.use('/api/auth', authRoutes);
 app.use('/api/valeters', valeterRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/admin', adminRoutes);
