@@ -1,244 +1,238 @@
+// routes/bookings.js
 const express = require('express');
-const { body, validationResult } = require('express-validator');
-const db = require('../config/database');
-const authMiddleware = require('../middleware/auth');
-
 const router = express.Router();
+const pool = require('../config/database');
+const { body, validationResult } = require('express-validator');
 
-// CREATE BOOKING (PUBLIC - NO AUTH REQUIRED)
-router.post('/public',
-  [
-    body('customerEmail').isEmail().normalizeEmail(),
-    body('customerPhone').optional().trim(),
-    body('valeterId').isInt(),
-    body('postcode').trim().notEmpty(),
-    body('bookingDate').notEmpty(),
-    body('bookingTime').notEmpty(),
-    body('vehicleSize').isIn(['small', 'medium', 'large', 'van']),
-    body('serviceTier').isIn(['budget', 'standard', 'premium']),
-    body('price').isNumeric()
-  ],
-  async (req, res) => {
-    try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
-      }
-
-      const { customerEmail, customerPhone, valeterId, postcode, bookingDate, bookingTime, vehicleSize, serviceTier, price } = req.body;
-
-      // Get or create customer
-      let customer = await db.query('SELECT id FROM customers WHERE email = $1', [customerEmail]);
-      let customerId;
-
-      if (customer.rows.length === 0) {
-        // Create new customer
-        const newCustomer = await db.query(
-          'INSERT INTO customers (email, phone) VALUES ($1, $2) RETURNING id',
-          [customerEmail, customerPhone || null]
-        );
-        customerId = newCustomer.rows[0].id;
-      } else {
-        customerId = customer.rows[0].id;
-      }
-
-      // Insert booking
-      const result = await db.query(
-        `INSERT INTO bookings 
-         (customer_id, valeter_id, postcode, booking_date, booking_time, vehicle_size, service_tier, price, status) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending') 
-         RETURNING *`,
-        [customerId, valeterId, postcode, bookingDate, bookingTime, vehicleSize, serviceTier, price]
-      );
-
-      const booking = result.rows[0];
-
-      // TODO: Send email notifications here
-
-      res.status(201).json({
-        message: 'Booking created successfully',
-        booking: {
-          id: booking.id,
-          valeterId: booking.valeter_id,
-          postcode: booking.postcode,
-          date: booking.booking_date,
-          time: booking.booking_time,
-          service: booking.service_tier,
-          price: parseFloat(booking.price),
-          status: booking.status
-        }
-      });
-    } catch (error) {
-      console.error('Booking creation error:', error);
-      res.status(500).json({ error: 'Failed to create booking', details: error.message });
-    }
-  }
-);
-
-// CREATE BOOKING
-router.post('/',
-  authMiddleware(['customer']),
-  [
-    body('valeterId').isInt(),
-    body('postcode').trim().notEmpty(),
-    body('bookingDate').isDate(),
-    body('bookingTime').matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/),
-    body('vehicleSize').isIn(['small', 'medium', 'large', 'van']),
-    body('serviceTier').isIn(['budget', 'standard', 'premium']),
-    body('price').isFloat({ min: 0 })
-  ],
-  async (req, res) => {
-    try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
-      }
-
-      const { valeterId, postcode, bookingDate, bookingTime, vehicleSize, serviceTier, price, photos } = req.body;
-      const userId = req.user.id;
-
-      // Calculate 12.5% commission
-      const commission = (price * 0.125).toFixed(2);
-
-      // Insert booking
-      const result = await db.query(
-        `INSERT INTO bookings 
-         (user_id, valeter_id, postcode, booking_date, booking_time, vehicle_size, service_tier, price, commission, photos, status) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending') 
-         RETURNING *`,
-        [userId, valeterId, postcode, bookingDate, bookingTime, vehicleSize, serviceTier, price, commission, JSON.stringify(photos || {})]
-      );
-
-      const booking = result.rows[0];
-
-      // TODO: Send email notifications here
-
-      res.status(201).json({
-        message: 'Booking created successfully',
-        booking: {
-          id: booking.id,
-          valeterId: booking.valeter_id,
-          postcode: booking.postcode,
-          date: booking.booking_date,
-          time: booking.booking_time,
-          service: booking.service_tier,
-          price: parseFloat(booking.price),
-          status: booking.status
-        }
-      });
-    } catch (error) {
-      console.error('Booking creation error:', error);
-      res.status(500).json({ error: 'Failed to create booking' });
-    }
-  }
-);
-
-// GET USER'S BOOKINGS
-router.get('/my-bookings', authMiddleware(['customer']), async (req, res) => {
+// Create a new booking
+router.post('/', [
+  body('postcode').trim().notEmpty().withMessage('Postcode is required'),
+  body('date').isISO8601().withMessage('Valid date is required'),
+  body('time').matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/).withMessage('Valid time is required'),
+  body('vehicleSize').isIn(['small', 'medium', 'large', 'van']).withMessage('Valid vehicle size required'),
+  body('tier').isIn(['budget', 'standard', 'premium']).withMessage('Valid service tier required'),
+  body('valeterId').isUUID().withMessage('Valid valeter ID required'),
+  body('price').isFloat({ min: 0 }).withMessage('Valid price required')
+], async (req, res) => {
   try {
-    const userId = req.user.id;
+    // Validate input
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
 
-    const result = await db.query(
-      `SELECT b.*, v.business_name, v.phone, v.rating 
-       FROM bookings b
-       JOIN valeters v ON b.valeter_id = v.id
-       WHERE b.user_id = $1
-       ORDER BY b.booking_date DESC, b.booking_time DESC`,
-      [userId]
+    const { 
+      postcode, 
+      date, 
+      time, 
+      vehicleSize, 
+      tier, 
+      valeterId, 
+      price,
+      customerName,
+      customerEmail,
+      customerPhone,
+      specialInstructions
+    } = req.body;
+
+    // Calculate commission split
+    const platformCommission = (price * 0.125).toFixed(2); // 12.5%
+    const valeterEarnings = (price * 0.875).toFixed(2); // 87.5%
+
+    const client = await pool.connect();
+    
+    try {
+      await client.query('BEGIN');
+
+      // Verify valeter exists and is approved
+      const valeterCheck = await client.query(
+        'SELECT id FROM valeters WHERE id = $1 AND application_status = $2',
+        [valeterId, 'approved']
+      );
+
+      if (valeterCheck.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Valeter not available' });
+      }
+
+      // Create booking
+      const bookingResult = await client.query(
+        `INSERT INTO bookings (
+          valeter_id,
+          customer_name,
+          customer_email,
+          customer_phone,
+          postcode,
+          booking_date,
+          booking_time,
+          vehicle_size,
+          service_tier,
+          price_quoted,
+          platform_commission,
+          valeter_earnings,
+          special_instructions,
+          status,
+          payment_status
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'pending', 'unpaid')
+        RETURNING id, created_at`,
+        [
+          valeterId,
+          customerName,
+          customerEmail,
+          customerPhone,
+          postcode.toUpperCase(),
+          date,
+          time,
+          vehicleSize,
+          tier,
+          price,
+          platformCommission,
+          valeterEarnings,
+          specialInstructions || null
+        ]
+      );
+
+      const bookingId = bookingResult.rows[0].id;
+
+      // If photos are included, save them (simplified - in production use cloud storage)
+      // TODO: Add photo upload handling with Cloudinary/S3
+
+      await client.query('COMMIT');
+
+      res.status(201).json({ 
+        message: 'Booking created successfully',
+        bookingId: bookingId,
+        booking: {
+          id: bookingId,
+          status: 'pending',
+          date: date,
+          time: time,
+          price: price,
+          createdAt: bookingResult.rows[0].created_at
+        }
+      });
+
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
+  } catch (error) {
+    console.error('Error creating booking:', error);
+    res.status(500).json({ error: 'Failed to create booking' });
+  }
+});
+
+// Get booking by ID
+router.get('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await pool.query(
+      `SELECT 
+        b.*,
+        v.business_name as valeter_name,
+        v.postcode as valeter_postcode
+      FROM bookings b
+      JOIN valeters v ON b.valeter_id = v.id
+      WHERE b.id = $1`,
+      [id]
     );
 
-    const bookings = result.rows.map(row => ({
-      id: row.id,
-      valeter: {
-        name: row.business_name,
-        phone: row.phone,
-        rating: parseFloat(row.rating)
-      },
-      postcode: row.postcode,
-      date: row.booking_date,
-      time: row.booking_time,
-      vehicleSize: row.vehicle_size,
-      service: row.service_tier,
-      price: parseFloat(row.price),
-      status: row.status,
-      createdAt: row.created_at
-    }));
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
 
-    res.json({ bookings });
+    res.json({ booking: result.rows[0] });
+
   } catch (error) {
-    console.error('Get bookings error:', error);
+    console.error('Error fetching booking:', error);
+    res.status(500).json({ error: 'Failed to fetch booking' });
+  }
+});
+
+// Get all bookings (for admin or valeter)
+router.get('/', async (req, res) => {
+  try {
+    const { status, valeterId, limit = 50 } = req.query;
+
+    let query = `
+      SELECT 
+        b.*,
+        v.business_name as valeter_name
+      FROM bookings b
+      JOIN valeters v ON b.valeter_id = v.id
+      WHERE 1=1
+    `;
+    
+    const params = [];
+    let paramCount = 1;
+
+    if (status) {
+      query += ` AND b.status = $${paramCount}`;
+      params.push(status);
+      paramCount++;
+    }
+
+    if (valeterId) {
+      query += ` AND b.valeter_id = $${paramCount}`;
+      params.push(valeterId);
+      paramCount++;
+    }
+
+    query += ` ORDER BY b.created_at DESC LIMIT $${paramCount}`;
+    params.push(limit);
+
+    const result = await pool.query(query, params);
+
+    res.json({ 
+      bookings: result.rows,
+      count: result.rows.length 
+    });
+
+  } catch (error) {
+    console.error('Error fetching bookings:', error);
     res.status(500).json({ error: 'Failed to fetch bookings' });
   }
 });
 
-// GET VALETER'S BOOKINGS
-router.get('/valeter-bookings', authMiddleware(['valeter']), async (req, res) => {
+// Update booking status
+router.patch('/:id/status', [
+  body('status').isIn(['pending', 'confirmed', 'in_progress', 'completed', 'cancelled', 'disputed'])
+    .withMessage('Valid status required')
+], async (req, res) => {
   try {
-    const valeterId = req.user.id;
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
 
-    const result = await db.query(
-      `SELECT b.*, u.first_name, u.last_name, u.phone, u.email 
-       FROM bookings b
-       JOIN users u ON b.user_id = u.id
-       WHERE b.valeter_id = $1
-       ORDER BY b.booking_date DESC, b.booking_time DESC`,
-      [valeterId]
+    const { id } = req.params;
+    const { status } = req.body;
+
+    const result = await pool.query(
+      `UPDATE bookings 
+       SET status = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2
+       RETURNING *`,
+      [status, id]
     );
 
-    const bookings = result.rows.map(row => ({
-      id: row.id,
-      customer: {
-        name: `${row.first_name} ${row.last_name}`,
-        phone: row.phone,
-        email: row.email
-      },
-      postcode: row.postcode,
-      date: row.booking_date,
-      time: row.booking_time,
-      vehicleSize: row.vehicle_size,
-      service: row.service_tier,
-      price: parseFloat(row.price),
-      commission: parseFloat(row.commission),
-      photos: row.photos,
-      status: row.status,
-      createdAt: row.created_at
-    }));
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
 
-    res.json({ bookings });
+    res.json({ 
+      message: 'Booking status updated',
+      booking: result.rows[0] 
+    });
+
   } catch (error) {
-    console.error('Get valeter bookings error:', error);
-    res.status(500).json({ error: 'Failed to fetch bookings' });
+    console.error('Error updating booking:', error);
+    res.status(500).json({ error: 'Failed to update booking' });
   }
 });
-
-// UPDATE BOOKING STATUS (Valeter only)
-router.patch('/:id/status',
-  authMiddleware(['valeter']),
-  [body('status').isIn(['confirmed', 'in_progress', 'completed', 'cancelled'])],
-  async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { status } = req.body;
-      const valeterId = req.user.id;
-
-      const result = await db.query(
-        `UPDATE bookings 
-         SET status = $1, updated_at = CURRENT_TIMESTAMP 
-         WHERE id = $2 AND valeter_id = $3 
-         RETURNING *`,
-        [status, id, valeterId]
-      );
-
-      if (result.rows.length === 0) {
-        return res.status(404).json({ error: 'Booking not found' });
-      }
-
-      res.json({ message: 'Booking status updated', booking: result.rows[0] });
-    } catch (error) {
-      console.error('Update booking error:', error);
-      res.status(500).json({ error: 'Failed to update booking' });
-    }
-  }
-);
 
 module.exports = router;
