@@ -1,19 +1,22 @@
-// config/database.js
 const { Pool } = require('pg');
-require('dotenv').config();
 
-// Create PostgreSQL connection pool
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
 // Test connection
-pool.on('connect', () => {
-  console.log('✅ Connected to PostgreSQL database');
+pool.connect((err, client, release) => {
+  if (err) {
+    console.error('❌ Error connecting to PostgreSQL database:', err.stack);
+  } else {
+    console.log('✅ Connected to PostgreSQL database');
+    release();
+  }
 });
 
-pool.on('error', (err) => {
+// Handle pool errors
+pool.on('error', (err, client) => {
   console.error('❌ Unexpected error on idle client', err);
   process.exit(-1);
 });
