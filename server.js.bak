@@ -374,19 +374,14 @@ app.post('/api/auth/login', async (req, res) => {
     const { email, password } = req.body;
 
     const user = await pool.query(
-      'SELECT id, email, password_hash, user_type FROM users WHERE email = $1 AND user_type = $2',
-      [email, 'admin']
+      'SELECT id, email, user_type FROM users WHERE email = $1 AND password = $2 AND user_type = $3',
+      [email, password, 'admin']
     );
 
     if (user.rows.length === 0) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    const bcrypt = require('bcrypt');
-    const validPassword = await bcrypt.compare(password, user.rows[0].password_hash);
-    if (!validPassword) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
     res.json({
       message: 'Login successful',
       user: user.rows[0]
