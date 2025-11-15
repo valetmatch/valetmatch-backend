@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const pool = require('./config/database');
 
+const adminRoutes = require('./admin-routes');
 const app = express();
 
 // Middleware
@@ -10,6 +11,7 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json());
+app.use('/', adminRoutes);
 
 // FIXED PRICING - Set by Valet Match (not individual valeters)
 const FIXED_PRICING = {
@@ -401,24 +403,36 @@ app.post('/api/auth/login', async (req, res) => {
 // Get admin stats
 app.get('/api/admin/stats', async (req, res) => {
   try {
-    const commission = await pool.query('SELECT COALESCE(SUM(platform_commission), 0) as total FROM booking_commission');
-    const bookings = await pool.query('SELECT COUNT(*) as total FROM bookings');
-    const valeters = await pool.query("SELECT COUNT(*) as total FROM valeters WHERE status = 'active'");
-    const pending = await pool.query("SELECT COUNT(*) as total FROM valeters WHERE status = 'pending'");
-    const recentBookings = await pool.query(`SELECT b.id, b.customer_name as customer, v.business_name as valeter, b.service_tier as service, b.total_price as price, b.booking_date as date, b.booking_status as status FROM bookings b LEFT JOIN valeters v ON b.valeter_id = v.id ORDER BY b.created_at DESC LIMIT 10`);
+    // Total commission earned
+    const commission = await pool.query(
+      'SELECT COALESCE(SUM(platform_commission), 0) as total FROM booking_commission'
+    );
+
+    // Total bookings
+    const bookings = await pool.query(
+      'SELECT COUNT(*) as total FROM bookings'
+    );
+
+    // Active valeters
+    const valeters = await pool.query(
+      "SELECT COUNT(*) as total FROM valeters WHERE status = 'active'"
+    );
+
+    // Pending applications
+    const pending = await pool.query(
+      "SELECT COUNT(*) as total FROM valeters WHERE status = 'pending'"
+    );
 
     res.json({
       totalCommission: parseFloat(commission.rows[0].total),
       totalBookings: parseInt(bookings.rows[0].total),
       activeValeters: parseInt(valeters.rows[0].total),
-      pendingApplications: parseInt(pending.rows[0].total),
-      recentBookings: recentBookings.rows || []
+      pendingApplications: parseInt(pending.rows[0].total)
     });
+
   } catch (error) {
     console.error('Error fetching admin stats:', error);
     res.status(500).json({ error: 'Failed to fetch stats' });
-  }
-});
   }
 });
 
