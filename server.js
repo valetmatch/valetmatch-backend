@@ -13,6 +13,9 @@ app.use(cors({
 app.use(express.json());
 app.use('/', adminRoutes);
 
+// Make database pool available to all routes
+app.locals.pool = pool;
+
 // FIXED PRICING - Set by Valet Match (not individual valeters)
 const FIXED_PRICING = {
   bronze: {
