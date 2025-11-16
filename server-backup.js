@@ -1,0 +1,589 @@
+const express = require('express');
+const cors = require('cors');
+const pool = require('./config/database');
+
+const adminRoutes = require('./admin-routes');
+const app = express();
+
+// Middleware
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'https://valetmatch.co.uk',
+  credentials: true
+}));
+app.use(express.json());
+app.use('/', adminRoutes);
+
+// Make database pool available to all routes
+app.locals.pool = pool;
+
+// FIXED PRICING - Set by Valet Match (not individual valeters)
+const FIXED_PRICING = {
+  bronze: {
+    small: 65,
+    medium: 75,
+    large: 85,
+    van: 'POA'
+  },
+  silver: {
+    small: 90,
+    medium: 105,
+    large: 120,
+    van: 'POA'
+  },
+  gold: {
+    small: 110,
+    medium: 130,
+    large: 150,
+    van: 'POA'
+  }
+};
+
+// Stripe fee calculation (1.5% + 20p)
+const calculateStripeFee = (price) => {
+  if (price === 'POA') return 'POA';
+  return (price * 0.015) + 0.20;
+};
+
+const calculateTotal = (price) => {
+  if (price === 'POA') return 'POA';
+  const stripeFee = calculateStripeFee(price);
+  return price + stripeFee;
+};
+
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    pricing_model: 'fixed',
+    database: 'connected'
+  });
+});
+
+// Get fixed pricing
+app.get('/api/pricing', (req, res) => {
+  res.json({
+    pricing: FIXED_PRICING,
+    commission_rate: 0.125,
+    valeter_rate: 0.875
+  });
+});
+
+// ======================
+// VALETER ROUTES
+// ======================
+
+// Valeter application
+app.post('/api/valeters/apply', async (req, res) => {
+  try {
+    const { businessName, email, phone, postcode, services, insurance, terms } = req.body;
+
+    // Validation
+    if (!businessName || !email || !phone || !postcode || !services || services.length === 0) {
+      return res.status(400).json({ error: 'All fields are required' });
+    }
+
+    if (!insurance || !terms) {
+      return res.status(400).json({ error: 'Insurance and terms acceptance required' });
+    }
+
+    // Check if email already exists
+    const existingValeter = await pool.query(
+      'SELECT id FROM valeters WHERE email = $1',
+      [email]
+    );
+
+    if (existingValeter.rows.length > 0) {
+      return res.status(400).json({ error: 'Email already registered' });
+    }
+
+    // Insert valeter application
+    const result = await pool.query(
+      `INSERT INTO valeters (business_name, email, phone, postcode, services_offered, has_insurance, status)
+       VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+       RETURNING id, business_name, email, status`,
+      [businessName, email, phone, postcode, services, insurance]
+    );
+
+    res.status(201).json({
+      message: 'Application submitted successfully',
+      valeter: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error('Error in valeter application:', error);
+    res.status(500).json({ error: 'Failed to submit application' });
+  }
+});
+
+// Search valeters (returns all active valeters - postcode filtering can be added later)
+app.get('/api/valeters/search', async (req, res) => {
+  try {
+    const { postcode, tier, vehicleSize } = req.query;
+
+    // Get all active valeters who offer the requested service tier
+    const valeters = await pool.query(
+      `SELECT id, business_name, postcode, rating, review_count
+       FROM valeters 
+       WHERE status = 'active' 
+       AND $1 = ANY(services_offered)
+       ORDER BY rating DESC, review_count DESC
+       LIMIT 10`,
+      [tier]
+    );
+
+    // Return valeters with fixed pricing
+    const price = FIXED_PRICING[tier]?.[vehicleSize];
+    const stripeFee = calculateStripeFee(price);
+    const total = calculateTotal(price);
+
+    const valettersWithPricing = valeters.rows.map(valeter => ({
+      ...valeter,
+      price: price,
+      stripeFee: stripeFee,
+      total: total,
+      distance: '2-5 miles' // Placeholder - implement real distance calculation later
+    }));
+
+    res.json({
+      valeters: valettersWithPricing,
+      count: valeters.rows.length
+    });
+
+  } catch (error) {
+    console.error('Error searching valeters:', error);
+    res.status(500).json({ error: 'Failed to search valeters' });
+  }
+});
+
+// ======================
+// BOOKING ROUTES
+// ======================
+
+// Create booking
+app.post('/api/bookings', async (req, res) => {
+  try {
+    const {
+      locationType,
+      postcode,
+      date,
+      time,
+      vehicleSize,
+      tier,
+      valeterId,
+      customerName,
+      customerEmail,
+      customerPhone
+    } = req.body;
+
+    // Validation
+    if (!locationType || !postcode || !date || !time || !vehicleSize || !tier || !valeterId) {
+      return res.status(400).json({ error: 'All booking fields are required' });
+    }
+
+    // Get fixed price
+    const servicePrice = FIXED_PRICING[tier]?.[vehicleSize];
+    if (!servicePrice) {
+      return res.status(400).json({ error: 'Invalid service tier or vehicle size' });
+    }
+
+    const stripeFee = servicePrice === 'POA' ? 'POA' : calculateStripeFee(servicePrice);
+    const totalPrice = servicePrice === 'POA' ? 'POA' : calculateTotal(servicePrice);
+
+    // Create booking
+    const booking = await pool.query(
+      `INSERT INTO bookings 
+       (valeter_id, customer_name, customer_email, customer_phone, location_type, 
+        postcode, booking_date, booking_time, vehicle_size, service_tier, 
+        service_price, stripe_fee, total_price, status, approval_token)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'pending', gen_random_uuid())
+       RETURNING id, approval_token, status`,
+      [valeterId, customerName, customerEmail, customerPhone, locationType,
+       postcode, date, time, vehicleSize, tier,
+       servicePrice, stripeFee, totalPrice]
+    );
+
+    // Calculate commission
+    if (servicePrice !== 'POA') {
+      const commission = servicePrice * 0.125; // 12.5% to Valet Match
+      const valeterEarnings = servicePrice * 0.875; // 87.5% to valeter
+
+      await pool.query(
+        `INSERT INTO booking_commission (booking_id, total_amount, platform_commission, valeter_earnings)
+         VALUES ($1, $2, $3, $4)`,
+        [booking.rows[0].id, servicePrice, commission, valeterEarnings]
+      );
+    }
+
+    res.status(201).json({
+      message: 'Booking created successfully',
+      booking: booking.rows[0],
+      approvalUrl: `/approve/${booking.rows[0].approval_token}`
+    });
+
+  } catch (error) {
+    console.error('Error creating booking:', error);
+    res.status(500).json({ error: 'Failed to create booking' });
+  }
+});
+
+// Get booking by approval token
+app.get('/api/bookings/approve/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    const booking = await pool.query(
+      `SELECT b.*, v.business_name, v.phone as valeter_phone, v.email as valeter_email
+       FROM bookings b
+       JOIN valeters v ON b.valeter_id = v.id
+       WHERE b.approval_token = $1`,
+      [token]
+    );
+
+    if (booking.rows.length === 0) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
+
+    res.json({ booking: booking.rows[0] });
+
+  } catch (error) {
+    console.error('Error fetching booking:', error);
+    res.status(500).json({ error: 'Failed to fetch booking' });
+  }
+});
+
+// Approve payment (capture Stripe authorization)
+app.post('/api/bookings/approve/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    // Get booking
+    const booking = await pool.query(
+      'SELECT id, status, total_price FROM bookings WHERE approval_token = $1',
+      [token]
+    );
+
+    if (booking.rows.length === 0) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
+
+    if (booking.rows[0].status === 'payment_approved') {
+      return res.status(400).json({ error: 'Payment already approved' });
+    }
+
+    // Update booking status
+    const updated = await pool.query(
+      `UPDATE bookings 
+       SET status = 'payment_approved', 
+           approved_at = NOW()
+       WHERE approval_token = $1
+       RETURNING id, status, approved_at`,
+      [token]
+    );
+
+    // TODO: Trigger Stripe payment capture here
+    // TODO: Send confirmation emails
+
+    res.json({
+      message: 'Payment approved successfully',
+      booking: updated.rows[0]
+    });
+
+  } catch (error) {
+    console.error('Error approving payment:', error);
+    res.status(500).json({ error: 'Failed to approve payment' });
+  }
+});
+
+// Valeter marks service as complete
+app.post('/api/bookings/:id/complete', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const booking = await pool.query(
+      `UPDATE bookings 
+       SET status = 'awaiting_approval', 
+           completed_at = NOW()
+       WHERE id = $1
+       RETURNING id, status, approval_token`,
+      [id]
+    );
+
+    if (booking.rows.length === 0) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
+
+    // TODO: Send SMS/email to customer with approval link
+
+    res.json({
+      message: 'Service marked as complete',
+      booking: booking.rows[0]
+    });
+
+  } catch (error) {
+    console.error('Error completing service:', error);
+    res.status(500).json({ error: 'Failed to complete service' });
+  }
+});
+
+// Cancel booking
+app.post('/api/bookings/:id/cancel', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { cancelledBy, reason } = req.body;
+
+    const booking = await pool.query(
+      `UPDATE bookings 
+       SET status = 'cancelled',
+           cancelled_by = $2,
+           cancellation_reason = $3,
+           cancelled_at = NOW()
+       WHERE id = $1
+       RETURNING id, status`,
+      [id, cancelledBy, reason]
+    );
+
+    if (booking.rows.length === 0) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
+
+    // Track cancellation for valeter monitoring
+    if (cancelledBy === 'valeter') {
+      await pool.query(
+        `UPDATE valeters 
+         SET cancellation_count = COALESCE(cancellation_count, 0) + 1,
+             last_cancellation_date = NOW()
+         WHERE id = (SELECT valeter_id FROM bookings WHERE id = $1)`,
+        [id]
+      );
+    }
+
+    res.json({
+      message: 'Booking cancelled',
+      booking: booking.rows[0]
+    });
+
+  } catch (error) {
+    console.error('Error cancelling booking:', error);
+    res.status(500).json({ error: 'Failed to cancel booking' });
+  }
+});
+
+// ======================
+// ADMIN ROUTES
+// ======================
+
+// Admin login
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    const user = await pool.query(
+      'SELECT id, email, password_hash, user_type FROM users WHERE email = $1 AND user_type = $2',
+      [email, 'admin']
+    );
+
+    if (user.rows.length === 0) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    const bcrypt = require('bcrypt');
+    const validPassword = await bcrypt.compare(password, user.rows[0].password_hash);
+    if (!validPassword) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    res.json({
+      message: 'Login successful',
+      user: user.rows[0]
+    });
+
+  } catch (error) {
+    console.error('Error logging in:', error);
+    res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+// Get admin stats
+app.get('/api/admin/stats', async (req, res) => {
+  try {
+    // Total commission earned
+    const commission = await pool.query(
+      'SELECT COALESCE(SUM(platform_commission), 0) as total FROM booking_commission'
+    );
+
+    // Total bookings
+    const bookings = await pool.query(
+      'SELECT COUNT(*) as total FROM bookings'
+    );
+
+    // Active valeters
+    const valeters = await pool.query(
+      "SELECT COUNT(*) as total FROM valeters WHERE status = 'active'"
+    );
+
+    // Pending applications
+    const pending = await pool.query(
+      "SELECT COUNT(*) as total FROM valeters WHERE status = 'pending'"
+    );
+
+    res.json({
+      totalCommission: parseFloat(commission.rows[0].total),
+      totalBookings: parseInt(bookings.rows[0].total),
+      activeValeters: parseInt(valeters.rows[0].total),
+      pendingApplications: parseInt(pending.rows[0].total)
+    });
+
+  } catch (error) {
+    console.error('Error fetching admin stats:', error);
+    res.status(500).json({ error: 'Failed to fetch stats' });
+  }
+});
+
+// Get pending valeters
+app.get('/api/admin/valeters/pending', async (req, res) => {
+  try {
+    const valeters = await pool.query(
+      `SELECT id, business_name, email, phone, postcode, services_offered, 
+              has_insurance, created_at
+       FROM valeters 
+       WHERE status = 'pending'
+       ORDER BY created_at DESC`
+    );
+
+    res.json({ valeters: valeters.rows });
+
+  } catch (error) {
+    console.error('Error fetching pending valeters:', error);
+    res.status(500).json({ error: 'Failed to fetch pending valeters' });
+  }
+});
+
+// Approve valeter
+app.post('/api/admin/valeters/:id/approve', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const valeter = await pool.query(
+      `UPDATE valeters 
+       SET status = 'active', approved_at = NOW()
+       WHERE id = $1
+       RETURNING id, business_name, email, status`,
+      [id]
+    );
+
+    if (valeter.rows.length === 0) {
+      return res.status(404).json({ error: 'Valeter not found' });
+    }
+
+    // TODO: Send approval email to valeter
+
+    res.json({
+      message: 'Valeter approved',
+      valeter: valeter.rows[0]
+    });
+
+  } catch (error) {
+    console.error('Error approving valeter:', error);
+    res.status(500).json({ error: 'Failed to approve valeter' });
+  }
+});
+
+// Reject valeter
+app.post('/api/admin/valeters/:id/reject', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const valeter = await pool.query(
+      `UPDATE valeters 
+       SET status = 'rejected'
+       WHERE id = $1
+       RETURNING id, business_name, email, status`,
+      [id]
+    );
+
+    if (valeter.rows.length === 0) {
+      return res.status(404).json({ error: 'Valeter not found' });
+    }
+
+    // TODO: Send rejection email to valeter
+
+    res.json({
+      message: 'Valeter rejected',
+      valeter: valeter.rows[0]
+    });
+
+  } catch (error) {
+    console.error('Error rejecting valeter:', error);
+    res.status(500).json({ error: 'Failed to reject valeter' });
+  }
+});
+
+// Get recent bookings for admin
+app.get('/api/admin/bookings', async (req, res) => {
+  try {
+    const bookings = await pool.query(
+      `SELECT b.id, b.customer_name, v.business_name as valeter_name,
+              b.service_tier, b.service_price, b.status, b.booking_date,
+              bc.platform_commission
+       FROM bookings b
+       JOIN valeters v ON b.valeter_id = v.id
+       LEFT JOIN booking_commission bc ON b.id = bc.booking_id
+       ORDER BY b.created_at DESC
+       LIMIT 20`
+    );
+
+    res.json({ bookings: bookings.rows });
+
+  } catch (error) {
+    console.error('Error fetching bookings:', error);
+    res.status(500).json({ error: 'Failed to fetch bookings' });
+  }
+});
+
+// Get valeter cancellation stats
+app.get('/api/admin/valeters/:id/cancellations', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const stats = await pool.query(
+      `SELECT 
+        v.business_name,
+        v.cancellation_count,
+        v.last_cancellation_date,
+        COUNT(b.id) as total_bookings,
+        CASE 
+          WHEN COUNT(b.id) > 0 
+          THEN ROUND((v.cancellation_count::numeric / COUNT(b.id)::numeric) * 100, 2)
+          ELSE 0 
+        END as cancellation_rate
+       FROM valeters v
+       LEFT JOIN bookings b ON v.id = b.valeter_id
+       WHERE v.id = $1
+       GROUP BY v.id, v.business_name, v.cancellation_count, v.last_cancellation_date`,
+      [id]
+    );
+
+    if (stats.rows.length === 0) {
+      return res.status(404).json({ error: 'Valeter not found' });
+    }
+
+    res.json({ stats: stats.rows[0] });
+
+  } catch (error) {
+    console.error('Error fetching cancellation stats:', error);
+    res.status(500).json({ error: 'Failed to fetch cancellation stats' });
+  }
+});
+
+// ======================
+// START SERVER
+// ======================
+
+const PORT = process.env.PORT || 5000;
+
+app.listen(PORT, () => {
+  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`✅ CORS enabled for: ${process.env.FRONTEND_URL || 'https://valetmatch.co.uk'}`);
+  console.log(`✅ Fixed pricing model active`);
+  console.log(`✅ Commission rate: 12.5% platform, 87.5% valeter`);
+});
