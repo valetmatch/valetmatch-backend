@@ -220,8 +220,6 @@ router.post('/approve-valeter/:id', verifyAdminToken, async (req, res) => {
     res.status(500).json({ error: 'Failed to approve valeter' });
   }
 });
-  }
-});
 
 // Reject valeter
 router.post('/reject-valeter/:id', verifyAdminToken, async (req, res) => {
