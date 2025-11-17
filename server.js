@@ -9,6 +9,10 @@ const app = express();
 app.set('trust proxy', true);
 const PORT = process.env.PORT || 3001;
 
+// Database setup
+const pool = require('./config/database');
+app.locals.pool = pool;
+
 // Middleware
 app.use(helmet());
 app.use(cors({
