@@ -180,19 +180,46 @@ router.post('/approve-valeter/:id', verifyAdminToken, async (req, res) => {
   try {
     const { pool } = req.app.locals;
     const { id } = req.params;
+    const crypto = require('crypto');
+    
+    // Generate password setup token
+    const setupToken = crypto.randomBytes(32).toString('hex');
+    const tokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
-    await pool.query(
-      `UPDATE valeters 
-       SET status = 'approved', approved_at = NOW()
-       WHERE id = $1`,
+    // Get valeter email
+    const valeterResult = await pool.query(
+      'SELECT email FROM valeters WHERE id = $1',
       [id]
     );
+    
+    if (!valeterResult.rows[0]) {
+      return res.status(404).json({ error: 'Valeter not found' });
+    }
 
-    res.json({ success: true });
+    // Update valeter with token
+    await pool.query(
+      `UPDATE valeters 
+       SET status = 'approved', 
+           approved_at = NOW(),
+           password_reset_token = $1,
+           password_reset_expires = $2
+       WHERE id = $3`,
+      [setupToken, tokenExpiry, id]
+    );
+
+    const setupUrl = `https://valetmatch.co.uk/valeter/setup?token=${setupToken}`;
+    
+    res.json({ 
+      success: true,
+      setupUrl: setupUrl,
+      email: valeterResult.rows[0].email
+    });
 
   } catch (error) {
     console.error('Approve error:', error);
     res.status(500).json({ error: 'Failed to approve valeter' });
+  }
+});
   }
 });
 
