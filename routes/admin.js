@@ -185,7 +185,6 @@ router.post('/approve-valeter/:id', verifyAdminToken, async (req, res) => {
     
     // Generate password setup token
     const setupToken = crypto.randomBytes(32).toString('hex');
-    const tokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
     // Get valeter email
     const valeterResult = await pool.query(
@@ -197,18 +196,15 @@ router.post('/approve-valeter/:id', verifyAdminToken, async (req, res) => {
       return res.status(404).json({ error: 'Valeter not found' });
     }
 
-    // Update valeter with token
+    // Just update status - no token storage for now
     await pool.query(
       `UPDATE valeters 
-       SET status = 'approved', 
-           approved_at = NOW(),
-           password_reset_token = $1,
-           password_reset_expires = $2
-       WHERE id = $3`,
-      [setupToken, tokenExpiry, id]
+       SET status = 'approved'
+       WHERE id = $1`,
+      [id]
     );
 
-    const setupUrl = `https://valetmatch.co.uk/valeter/setup?token=${setupToken}`;
+    const setupUrl = `https://valetmatch.co.uk/valeter/setup?email=${valeterResult.rows[0].email}&token=${setupToken}`;
     
     res.json({ 
       success: true,
