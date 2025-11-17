@@ -265,4 +265,4 @@ router.get('/verify', verifyValeterToken, async (req, res) => {
   }
 });
 
-module.exports = { router, verifyValeterToken };
+module.exports = router;
