@@ -1,281 +1,219 @@
-// routes/admin.js
+// admin-routes.js - Add this to your backend
+
 const express = require('express');
 const router = express.Router();
-const pool = require('../config/database');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 
-// TODO: Add authentication middleware for admin routes
-// For now, these are unprotected - ADD AUTH IN PRODUCTION!
+// Hardcoded admin credentials
+const ADMIN_EMAIL = 'deputymitchell@me.com';
+const ADMIN_PASSWORD_HASH = bcrypt.hashSync('Wanderers039!', 10);
+const JWT_SECRET = process.env.JWT_SECRET || 'valet-match-secret-key-2024';
 
-// Get pending valeter applications
-router.get('/valeters/pending', async (req, res) => {
+// Admin login endpoint
+router.post('/login', async (req, res) => {
   try {
-    const result = await pool.query(
-      `SELECT 
-        v.id,
-        v.business_name,
-        v.postcode,
-        v.offers_budget,
-        v.offers_standard,
-        v.offers_premium,
-        v.has_insurance,
-        v.created_at,
-        u.email,
-        u.phone
-      FROM valeters v
-      JOIN users u ON v.user_id = u.id
-      WHERE v.application_status = 'pending'
-      ORDER BY v.created_at ASC`
+    const { email, password } = req.body;
+
+    // Check email
+    if (email !== ADMIN_EMAIL) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Check password
+    const passwordMatch = bcrypt.compareSync(password, ADMIN_PASSWORD_HASH);
+    if (!passwordMatch) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { email: ADMIN_EMAIL, role: 'admin' },
+      JWT_SECRET,
+      { expiresIn: '24h' }
     );
 
-    // Format services as array
+    res.json({
+      success: true,
+      token,
+      user: { email: ADMIN_EMAIL, role: 'admin' }
+    });
+
+  } catch (error) {
+    console.error('Admin login error:', error);
+    res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+// Middleware to verify admin token
+const verifyAdminToken = (req, res, next) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.role !== 'admin') {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    req.admin = decoded;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+};
+
+// Get admin dashboard stats
+router.get('/admin/stats', verifyAdminToken, async (req, res) => {
+  try {
+    const { pool } = req.app.locals;
+
+    // Get total bookings
+    const bookingsResult = await pool.query('SELECT COUNT(*) as count FROM bookings');
+    const totalBookings = parseInt(bookingsResult.rows[0].count);
+
+    // Get completed bookings for commission calculation
+    const completedResult = await pool.query(
+      `SELECT SUM(CAST(price AS DECIMAL)) as total 
+       FROM bookings 
+       WHERE status = 'completed'`
+    );
+    const totalRevenue = parseFloat(completedResult.rows[0].total || 0);
+    const commissionEarned = (totalRevenue * 0.125).toFixed(2);
+
+    // Get active valeters
+    const valetersResult = await pool.query(
+      `SELECT COUNT(*) as count 
+       FROM valeters 
+       WHERE status = 'approved'`
+    );
+    const activeValeters = parseInt(valetersResult.rows[0].count);
+
+    // Get pending applications
+    const pendingResult = await pool.query(
+      `SELECT COUNT(*) as count 
+       FROM valeters 
+       WHERE status = 'pending'`
+    );
+    const pendingApplications = parseInt(pendingResult.rows[0].count);
+
+    res.json({
+      totalBookings,
+      commissionEarned,
+      activeValeters,
+      pendingApplications
+    });
+
+  } catch (error) {
+    console.error('Stats error:', error);
+    res.status(500).json({ error: 'Failed to fetch stats' });
+  }
+});
+
+// Get pending valeters
+router.get('/admin/pending-valeters', verifyAdminToken, async (req, res) => {
+  try {
+    const { pool } = req.app.locals;
+    
+    const result = await pool.query(
+      `SELECT id, business_name, email, phone, postcode, 
+              services_offered, created_at
+       FROM valeters 
+       WHERE status = 'pending'
+       ORDER BY created_at DESC`
+    );
+
     const valeters = result.rows.map(v => ({
       id: v.id,
       name: v.business_name,
       email: v.email,
-      phone: u.phone,
+      phone: v.phone,
       postcode: v.postcode,
-      services: [
-        v.offers_budget && 'budget',
-        v.offers_standard && 'standard',
-        v.offers_premium && 'premium'
-      ].filter(Boolean),
-      hasInsurance: v.has_insurance,
-      appliedAt: v.created_at
+      services: v.services_offered || [],
+      createdAt: v.created_at
     }));
 
-    res.json({ valeters });
+    res.json(valeters);
 
   } catch (error) {
-    console.error('Error fetching pending valeters:', error);
-    res.status(500).json({ error: 'Failed to fetch pending applications' });
+    console.error('Pending valeters error:', error);
+    res.status(500).json({ error: 'Failed to fetch pending valeters' });
   }
 });
 
-// Approve a valeter
-router.post('/valeters/:id/approve', async (req, res) => {
+// Get recent bookings
+router.get('/admin/bookings', verifyAdminToken, async (req, res) => {
   try {
-    const { id } = req.params;
-    // TODO: Get admin user ID from auth token
-    const adminId = null; // Replace with actual admin ID from JWT
+    const { pool } = req.app.locals;
+    
+    const result = await pool.query(
+      `SELECT b.id, b.customer_name, b.service_tier, b.price, 
+              b.booking_date, b.status, v.business_name as valeter_name
+       FROM bookings b
+       LEFT JOIN valeters v ON b.valeter_id = v.id
+       ORDER BY b.created_at DESC
+       LIMIT 20`
+    );
 
-    const client = await pool.connect();
+    const bookings = result.rows.map(b => ({
+      id: b.id,
+      customer: b.customer_name,
+      valeter: b.valeter_name,
+      service: b.service_tier,
+      price: b.price,
+      date: b.booking_date,
+      status: b.status
+    }));
 
-    try {
-      await client.query('BEGIN');
-
-      // Update valeter status
-      const result = await client.query(
-        `UPDATE valeters 
-         SET application_status = 'approved',
-             approved_at = CURRENT_TIMESTAMP,
-             approved_by = $1,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = $2 AND application_status = 'pending'
-         RETURNING id, business_name, user_id`,
-        [adminId, id]
-      );
-
-      if (result.rows.length === 0) {
-        await client.query('ROLLBACK');
-        return res.status(404).json({ error: 'Valeter not found or already processed' });
-      }
-
-      const valeter = result.rows[0];
-
-      // Get valeter email
-      const userResult = await client.query(
-        'SELECT email FROM users WHERE id = $1',
-        [valeter.user_id]
-      );
-
-      const email = userResult.rows[0].email;
-
-      // TODO: Send approval email to valeter
-      console.log(`📧 TODO: Send approval email to ${email}`);
-
-      // Log admin action
-      await client.query(
-        `INSERT INTO admin_actions (admin_id, action_type, target_type, target_id, details)
-         VALUES ($1, 'approve_valeter', 'valeter', $2, $3)`,
-        [adminId, id, JSON.stringify({ business_name: valeter.business_name })]
-      );
-
-      await client.query('COMMIT');
-
-      res.json({ 
-        message: 'Valeter approved successfully',
-        valeterId: id,
-        email: email
-      });
-
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
+    res.json(bookings);
 
   } catch (error) {
-    console.error('Error approving valeter:', error);
+    console.error('Bookings error:', error);
+    res.status(500).json({ error: 'Failed to fetch bookings' });
+  }
+});
+
+// Approve valeter
+router.post('/admin/approve-valeter/:id', verifyAdminToken, async (req, res) => {
+  try {
+    const { pool } = req.app.locals;
+    const { id } = req.params;
+
+    await pool.query(
+      `UPDATE valeters 
+       SET status = 'approved', approved_at = NOW()
+       WHERE id = $1`,
+      [id]
+    );
+
+    res.json({ success: true });
+
+  } catch (error) {
+    console.error('Approve error:', error);
     res.status(500).json({ error: 'Failed to approve valeter' });
   }
 });
 
-// Reject a valeter
-router.post('/valeters/:id/reject', async (req, res) => {
+// Reject valeter
+router.post('/admin/reject-valeter/:id', verifyAdminToken, async (req, res) => {
   try {
+    const { pool } = req.app.locals;
     const { id } = req.params;
-    const { reason } = req.body;
-    // TODO: Get admin user ID from auth token
-    const adminId = null;
 
-    const client = await pool.connect();
+    await pool.query(
+      `UPDATE valeters 
+       SET status = 'rejected', rejected_at = NOW()
+       WHERE id = $1`,
+      [id]
+    );
 
-    try {
-      await client.query('BEGIN');
-
-      const result = await client.query(
-        `UPDATE valeters 
-         SET application_status = 'rejected',
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = $1 AND application_status = 'pending'
-         RETURNING id, business_name, user_id`,
-        [id]
-      );
-
-      if (result.rows.length === 0) {
-        await client.query('ROLLBACK');
-        return res.status(404).json({ error: 'Valeter not found or already processed' });
-      }
-
-      const valeter = result.rows[0];
-
-      // Get valeter email
-      const userResult = await client.query(
-        'SELECT email FROM users WHERE id = $1',
-        [valeter.user_id]
-      );
-
-      const email = userResult.rows[0].email;
-
-      // TODO: Send rejection email
-      console.log(`📧 TODO: Send rejection email to ${email}`);
-
-      // Log admin action
-      await client.query(
-        `INSERT INTO admin_actions (admin_id, action_type, target_type, target_id, details)
-         VALUES ($1, 'reject_valeter', 'valeter', $2, $3)`,
-        [adminId, id, JSON.stringify({ business_name: valeter.business_name, reason })]
-      );
-
-      await client.query('COMMIT');
-
-      res.json({ 
-        message: 'Valeter rejected',
-        valeterId: id
-      });
-
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
+    res.json({ success: true });
 
   } catch (error) {
-    console.error('Error rejecting valeter:', error);
+    console.error('Reject error:', error);
     res.status(500).json({ error: 'Failed to reject valeter' });
-  }
-});
-
-// Get all valeters (approved)
-router.get('/valeters', async (req, res) => {
-  try {
-    const result = await pool.query(
-      `SELECT 
-        v.id,
-        v.business_name,
-        v.postcode,
-        v.average_rating,
-        v.total_reviews,
-        v.total_bookings,
-        v.completed_bookings,
-        v.application_status,
-        v.created_at,
-        u.email
-      FROM valeters v
-      JOIN users u ON v.user_id = u.id
-      WHERE v.application_status = 'approved'
-      ORDER BY v.created_at DESC`
-    );
-
-    res.json({ 
-      valeters: result.rows,
-      count: result.rows.length 
-    });
-
-  } catch (error) {
-    console.error('Error fetching valeters:', error);
-    res.status(500).json({ error: 'Failed to fetch valeters' });
-  }
-});
-
-// Get dashboard statistics
-router.get('/stats', async (req, res) => {
-  try {
-    // Total commission earned
-    const commissionResult = await pool.query(
-      `SELECT COALESCE(SUM(platform_commission), 0) as total_commission
-       FROM bookings
-       WHERE payment_status = 'paid'`
-    );
-
-    // Total bookings
-    const bookingsResult = await pool.query(
-      'SELECT COUNT(*) as total_bookings FROM bookings'
-    );
-
-    // Active valeters
-    const valetersResult = await pool.query(
-      `SELECT COUNT(*) as active_valeters 
-       FROM valeters 
-       WHERE application_status = 'approved'`
-    );
-
-    // Pending applications
-    const pendingResult = await pool.query(
-      `SELECT COUNT(*) as pending_applications 
-       FROM valeters 
-       WHERE application_status = 'pending'`
-    );
-
-    // Recent bookings
-    const recentBookings = await pool.query(
-      `SELECT 
-        b.id,
-        b.customer_name as customer,
-        v.business_name as valeter,
-        b.service_tier as service,
-        b.price_quoted as price,
-        b.booking_date as date,
-        b.status
-      FROM bookings b
-      JOIN valeters v ON b.valeter_id = v.id
-      ORDER BY b.created_at DESC
-      LIMIT 10`
-    );
-
-    res.json({
-      commission: parseFloat(commissionResult.rows[0].total_commission),
-      totalBookings: parseInt(bookingsResult.rows[0].total_bookings),
-      activeValeters: parseInt(valetersResult.rows[0].active_valeters),
-      pendingApplications: parseInt(pendingResult.rows[0].pending_applications),
-      recentBookings: recentBookings.rows
-    });
-
-  } catch (error) {
-    console.error('Error fetching stats:', error);
-    res.status(500).json({ error: 'Failed to fetch statistics' });
   }
 });
 
