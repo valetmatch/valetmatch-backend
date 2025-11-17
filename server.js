@@ -32,11 +32,15 @@ app.use('/api/', limiter);
 // Routes
 const authRoutes = require('./routes/auth');
 const valeterRoutes = require('./routes/valeters');
+const valeterAuthRoutes = require('./valeter-auth-routes');
+const valeterPortalRoutes = require('./valeter-routes');
 const bookingRoutes = require('./routes/bookings');
 const adminRoutes = require('./routes/admin');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/valeters', valeterRoutes);
+app.use('/valeter/auth', valeterAuthRoutes);
+app.use('/valeter', valeterPortalRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/admin', adminRoutes);
 
