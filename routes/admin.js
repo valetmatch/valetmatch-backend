@@ -66,7 +66,7 @@ const verifyAdminToken = (req, res, next) => {
 };
 
 // Get admin dashboard stats
-router.get('/admin/stats', verifyAdminToken, async (req, res) => {
+router.get('/stats', verifyAdminToken, async (req, res) => {
   try {
     const { pool } = req.app.locals;
 
@@ -113,7 +113,7 @@ router.get('/admin/stats', verifyAdminToken, async (req, res) => {
 });
 
 // Get pending valeters
-router.get('/admin/pending-valeters', verifyAdminToken, async (req, res) => {
+router.get('/pending-valeters', verifyAdminToken, async (req, res) => {
   try {
     const { pool } = req.app.locals;
     
@@ -144,7 +144,7 @@ router.get('/admin/pending-valeters', verifyAdminToken, async (req, res) => {
 });
 
 // Get recent bookings
-router.get('/admin/bookings', verifyAdminToken, async (req, res) => {
+router.get('/bookings', verifyAdminToken, async (req, res) => {
   try {
     const { pool } = req.app.locals;
     
@@ -176,7 +176,7 @@ router.get('/admin/bookings', verifyAdminToken, async (req, res) => {
 });
 
 // Approve valeter
-router.post('/admin/approve-valeter/:id', verifyAdminToken, async (req, res) => {
+router.post('/approve-valeter/:id', verifyAdminToken, async (req, res) => {
   try {
     const { pool } = req.app.locals;
     const { id } = req.params;
@@ -197,7 +197,7 @@ router.post('/admin/approve-valeter/:id', verifyAdminToken, async (req, res) => 
 });
 
 // Reject valeter
-router.post('/admin/reject-valeter/:id', verifyAdminToken, async (req, res) => {
+router.post('/reject-valeter/:id', verifyAdminToken, async (req, res) => {
   try {
     const { pool } = req.app.locals;
     const { id } = req.params;
