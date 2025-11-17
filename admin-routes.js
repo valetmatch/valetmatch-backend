@@ -11,7 +11,7 @@ const ADMIN_PASSWORD_HASH = bcrypt.hashSync('Wanderers039!', 10);
 const JWT_SECRET = process.env.JWT_SECRET || 'valet-match-secret-key-2024';
 
 // Admin login endpoint
-router.post('/auth/admin/login', async (req, res) => {
+router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
 
