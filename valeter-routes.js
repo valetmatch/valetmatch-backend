@@ -3,7 +3,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { verifyValeterToken } = require('./valeter-auth-routes');
+const { verifyValeterToken } = require('./valeter-middleware');
 
 // All routes require authentication
 router.use(verifyValeterToken);
