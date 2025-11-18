@@ -4,6 +4,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 require('dotenv').config();
+const { sendPasswordSetupEmail } = require('./emailService');
 
 const app = express();
 app.set('trust proxy', true);
