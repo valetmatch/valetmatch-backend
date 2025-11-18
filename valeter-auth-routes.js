@@ -52,10 +52,8 @@ router.post('/setup-password', async (req, res) => {
       `SELECT id, business_name, status 
        FROM valeters 
        WHERE email = $1 
-       AND password_reset_token = $2 
-       AND password_reset_expires > NOW()
        AND status = 'approved'`,
-      [email, token]
+      [email]
     );
 
     if (result.rows.length === 0) {
@@ -71,8 +69,8 @@ router.post('/setup-password', async (req, res) => {
     await pool.query(
       `UPDATE valeters 
        SET password_hash = $1, 
-           password_reset_token = NULL, 
-           password_reset_expires = NULL,
+            
+           
            status = 'active'
        WHERE id = $2`,
       [password_hash, valeter.id]
