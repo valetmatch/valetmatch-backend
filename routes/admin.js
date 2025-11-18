@@ -4,6 +4,7 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { sendPasswordSetupEmail } = require('../emailService');
 
 // Hardcoded admin credentials
 const ADMIN_EMAIL = 'deputymitchell@me.com';
@@ -176,27 +177,36 @@ router.get('/bookings', verifyAdminToken, async (req, res) => {
   }
 });
 
-// Approve valeter
+// Approve valeter - WITH AUTOMATIC EMAIL SENDING
 router.post('/approve-valeter/:id', verifyAdminToken, async (req, res) => {
   try {
     const { pool } = req.app.locals;
     const { id } = req.params;
-    const crypto = require('crypto');
     
-    // Generate password setup token
-    const setupToken = crypto.randomBytes(32).toString('hex');
-
-    // Get valeter email
+    // Get valeter details
     const valeterResult = await pool.query(
-      'SELECT email FROM valeters WHERE id = $1',
+      'SELECT email, business_name FROM valeters WHERE id = $1',
       [id]
     );
     
-    if (!valeterResult.rows[0]) {
+    if (valeterResult.rows.length === 0) {
       return res.status(404).json({ error: 'Valeter not found' });
     }
 
-    // Just update status - no token storage for now
+    const valeter = valeterResult.rows[0];
+
+    // Generate password setup token (valid 24 hours)
+    const setupToken = jwt.sign(
+      { 
+        valeterId: id,
+        email: valeter.email,
+        type: 'password_setup'
+      },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    // Update valeter status to approved
     await pool.query(
       `UPDATE valeters 
        SET status = 'approved'
@@ -204,17 +214,43 @@ router.post('/approve-valeter/:id', verifyAdminToken, async (req, res) => {
       [id]
     );
 
-    const setupUrl = `https://valetmatch.co.uk/valeter/setup?email=${valeterResult.rows[0].email}&token=${setupToken}`;
+    // Create setup URL
+    const setupUrl = `https://valetmatch.co.uk/setup-password?token=${setupToken}`;
     
-    res.json({ 
-      success: true,
-      setupUrl: setupUrl,
-      email: valeterResult.rows[0].email
-    });
+    // **AUTOMATICALLY SEND EMAIL**
+    console.log(`📧 Sending password setup email to ${valeter.email}...`);
+    
+    const emailResult = await sendPasswordSetupEmail(
+      valeter.email,
+      valeter.business_name,
+      setupUrl
+    );
+
+    if (emailResult.success) {
+      console.log(`✅ Email sent successfully to ${valeter.email}`);
+      
+      res.json({ 
+        success: true,
+        message: `Valeter approved and email sent to ${valeter.email}`,
+        setupUrl: setupUrl, // Still return for admin to see if needed
+        emailSent: true
+      });
+    } else {
+      console.error(`⚠️ Email failed to send: ${emailResult.error}`);
+      
+      // Still return success for approval, but note email failed
+      res.json({ 
+        success: true,
+        message: `Valeter approved but email failed to send. Setup URL: ${setupUrl}`,
+        setupUrl: setupUrl,
+        emailSent: false,
+        emailError: emailResult.error
+      });
+    }
 
   } catch (error) {
     console.error('Approve error:', error);
-    res.status(500).json({ error: 'Failed to approve valeter' });
+    res.status(500).json({ error: 'Failed to approve valeter', details: error.message });
   }
 });
 
