@@ -147,11 +147,7 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
-    // Update last login
-    await pool.query(
-      'UPDATE valeters SET last_login_at = NOW() WHERE id = $1',
-      [valeter.id]
-    );
+    // Last login tracking removed (column does not exist)
 
     // Generate JWT
     const token = jwt.sign(
