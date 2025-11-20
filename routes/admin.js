@@ -205,7 +205,7 @@ router.post('/approve-valeter/:id', verifyAdminToken, async (req, res) => {
     // Update valeter: set password, mark as approved, flag for password change
     await pool.query(
       `UPDATE valeters 
-       SET status = 'approved', 
+       SET status = 'active', 
            password_hash = $1,
            must_change_password = true
        WHERE id = $2`,
