@@ -150,18 +150,18 @@ router.get('/bookings', verifyAdminToken, async (req, res) => {
     const { pool } = req.app.locals;
     
     const result = await pool.query(
-      `SELECT b.id, c.email as customer_email, b.service_tier, b.price, 
+      `SELECT b.id, b.service_tier, b.price, 
               b.booking_date, b.status, v.business_name as valeter_name
        FROM bookings b
        LEFT JOIN valeters v ON b.valeter_id = v.id
-       LEFT JOIN customers c ON b.customer_id = c.id
        ORDER BY b.created_at DESC
        LIMIT 20`
     );
 
     const bookings = result.rows.map(b => ({
       id: b.id,
-      customer: b.customer_email,
+      customer: 'N/A',
+      valeter: b.valeter_name,
       valeter: b.valeter_name,
       service: b.service_tier,
       price: b.price,
