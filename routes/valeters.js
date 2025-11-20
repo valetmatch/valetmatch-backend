@@ -50,7 +50,7 @@ router.post('/apply', [
         `INSERT INTO valeters (business_name, email, password_hash, phone, postcode, services, insurance_verified, status)
          VALUES ($1, $2, '', $3, $4, $5, $6, 'pending')
          RETURNING id`,
-        [businessName, email, phone, postcode, services, insurance]
+        [businessName, email, phone, postcode, JSON.stringify(services), insurance]
       );
 
       await client.query('COMMIT');
