@@ -145,6 +145,24 @@ router.post('/login', async (req, res) => {
 
     if (!passwordMatch) {
       return res.status(401).json({ error: 'Invalid email or password' });
+    // Check if password change is required
+    if (valeter.must_change_password) {
+      const changePasswordToken = jwt.sign(
+        { 
+          valeterId: valeter.id, 
+          email: valeter.email,
+          type: 'password_change_required'
+        },
+        JWT_SECRET,
+        { expiresIn: '1h' }
+      );
+      
+      return res.json({ 
+        requirePasswordChange: true,
+        changePasswordToken: changePasswordToken,
+        message: 'You must change your password before accessing your dashboard'
+      });
+    }
     }
 
     // Last login tracking removed (column does not exist)
@@ -259,4 +277,71 @@ router.get('/verify', verifyValeterToken, async (req, res) => {
   }
 });
 
+
+// Change password (for first-time login)
+router.post('/change-password', async (req, res) => {
+  try {
+    const { changePasswordToken, newPassword } = req.body;
+
+    if (!changePasswordToken || !newPassword) {
+      return res.status(400).json({ error: 'Token and new password required' });
+    }
+
+    // Verify token
+    const decoded = jwt.verify(changePasswordToken, JWT_SECRET);
+    
+    if (decoded.type !== 'password_change_required') {
+      return res.status(403).json({ error: 'Invalid token type' });
+    }
+
+    // Validate new password
+    if (newPassword.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+    if (!/[A-Z]/.test(newPassword)) {
+      return res.status(400).json({ error: 'Password must contain at least one capital letter' });
+    }
+    if (!/[0-9]/.test(newPassword)) {
+      return res.status(400).json({ error: 'Password must contain at least one number' });
+    }
+    if (!/[!@#$%^&*]/.test(newPassword)) {
+      return res.status(400).json({ error: 'Password must contain at least one special character (!@#$%^&*)' });
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update password and clear must_change_password flag
+    await pool.query(
+      `UPDATE valeters 
+       SET password_hash = $1, must_change_password = false 
+       WHERE id = $2`,
+      [hashedPassword, decoded.valeterId]
+    );
+
+    // Generate regular login token
+    const token = jwt.sign(
+      { 
+        valeterId: decoded.valeterId, 
+        email: decoded.email,
+        type: 'valeter'
+      },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({ 
+      success: true,
+      token: token,
+      message: 'Password changed successfully'
+    });
+
+  } catch (error) {
+    console.error('Change password error:', error);
+    if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+    res.status(500).json({ error: 'Failed to change password' });
+  }
+});
 module.exports = router;
