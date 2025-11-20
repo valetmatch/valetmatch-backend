@@ -120,7 +120,7 @@ router.get('/pending-valeters', verifyAdminToken, async (req, res) => {
     
     const result = await pool.query(
       `SELECT id, business_name, email, phone, postcode, 
-              services, created_at
+              services_offered, created_at
        FROM valeters 
        WHERE status = 'pending'
        ORDER BY created_at DESC`
@@ -132,7 +132,7 @@ router.get('/pending-valeters', verifyAdminToken, async (req, res) => {
       email: v.email,
       phone: v.phone,
       postcode: v.postcode,
-      services: v.services || [],
+      services: v.services_offered || [],
       createdAt: v.created_at
     }));
 
@@ -147,21 +147,6 @@ router.get('/pending-valeters', verifyAdminToken, async (req, res) => {
 // Get recent bookings
 router.get('/bookings', verifyAdminToken, async (req, res) => {
   try {
-    const { pool } = req.app.locals;
-    
-    const result = await pool.query(
-      `SELECT b.id, b.service_tier, b.price, 
-              b.booking_date, b.status, v.business_name as valeter_name
-       FROM bookings b
-       LEFT JOIN valeters v ON b.valeter_id = v.id
-       ORDER BY b.created_at DESC
-       LIMIT 20`
-    );
-
-    const bookings = result.rows.map(b => ({
-      id: b.id,
-      customer: 'N/A',
-      valeter: b.valeter_name,
       valeter: b.valeter_name,
       service: b.service_tier,
       price: b.price,
@@ -178,14 +163,10 @@ router.get('/bookings', verifyAdminToken, async (req, res) => {
 });
 
 // Approve valeter - WITH AUTOMATIC EMAIL SENDING
-// Approve valeter - WITH TEMP PASSWORD
 router.post('/approve-valeter/:id', verifyAdminToken, async (req, res) => {
   try {
     const { pool } = req.app.locals;
     const { id } = req.params;
-    const bcrypt = require('bcryptjs');
-    const { generateTempPassword } = require('../utils/temp_password_generator');
-    const { sendTempPasswordEmail } = require('../emailService');
     
     // Get valeter details
     const valeterResult = await pool.query(
@@ -199,27 +180,35 @@ router.post('/approve-valeter/:id', verifyAdminToken, async (req, res) => {
 
     const valeter = valeterResult.rows[0];
 
-    // Generate temporary password
-    const tempPassword = generateTempPassword(valeter.business_name);
-    const hashedPassword = await bcrypt.hash(tempPassword, 10);
-
-    // Update valeter: set password, mark as approved, flag for password change
-    await pool.query(
-      `UPDATE valeters 
-       SET status = 'approved', 
-           password_hash = $1,
-           must_change_password = true
-       WHERE id = $2`,
-      [hashedPassword, id]
+    // Generate password setup token (valid 24 hours)
+    const setupToken = jwt.sign(
+      { 
+        valeterId: id,
+        email: valeter.email,
+        type: 'password_setup'
+      },
+      JWT_SECRET,
+      { expiresIn: '24h' }
     );
 
-    // Send email with temp password
-    console.log(`📧 Sending temp password email to ${valeter.email}...`);
+    // Update valeter status to approved
+    await pool.query(
+      `UPDATE valeters 
+       SET status = 'approved'
+       WHERE id = $1`,
+      [id]
+    );
+
+    // Create setup URL
+    const setupUrl = `https://valetmatch.co.uk/setup-password?token=${setupToken}`;
     
-    const emailResult = await sendTempPasswordEmail(
+    // **AUTOMATICALLY SEND EMAIL**
+    console.log(`📧 Sending password setup email to ${valeter.email}...`);
+    
+    const emailResult = await sendPasswordSetupEmail(
       valeter.email,
       valeter.business_name,
-      tempPassword
+      setupUrl
     );
 
     if (emailResult.success) {
@@ -227,16 +216,18 @@ router.post('/approve-valeter/:id', verifyAdminToken, async (req, res) => {
       
       res.json({ 
         success: true,
-        message: `Valeter approved and credentials sent to ${valeter.email}`,
+        message: `Valeter approved and email sent to ${valeter.email}`,
+        setupUrl: setupUrl, // Still return for admin to see if needed
         emailSent: true
       });
     } else {
       console.error(`⚠️ Email failed to send: ${emailResult.error}`);
       
+      // Still return success for approval, but note email failed
       res.json({ 
         success: true,
-        message: `Valeter approved but email failed. Temp password: ${tempPassword}`,
-        tempPassword: tempPassword,
+        message: `Valeter approved but email failed to send. Setup URL: ${setupUrl}`,
+        setupUrl: setupUrl,
         emailSent: false,
         emailError: emailResult.error
       });
@@ -245,8 +236,6 @@ router.post('/approve-valeter/:id', verifyAdminToken, async (req, res) => {
   } catch (error) {
     console.error('Approve error:', error);
     res.status(500).json({ error: 'Failed to approve valeter', details: error.message });
-  }
-});
   }
 });
 
