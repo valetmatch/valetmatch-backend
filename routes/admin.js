@@ -178,7 +178,6 @@ router.get('/bookings', verifyAdminToken, async (req, res) => {
 });
 
 // Approve valeter - WITH AUTOMATIC EMAIL SENDING
-// Approve valeter - WITH TEMP PASSWORD
 router.post('/approve-valeter/:id', verifyAdminToken, async (req, res) => {
   try {
     const { pool } = req.app.locals;
@@ -245,8 +244,6 @@ router.post('/approve-valeter/:id', verifyAdminToken, async (req, res) => {
   } catch (error) {
     console.error('Approve error:', error);
     res.status(500).json({ error: 'Failed to approve valeter', details: error.message });
-  }
-});
   }
 });
 
