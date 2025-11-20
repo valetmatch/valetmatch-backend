@@ -59,8 +59,6 @@ router.post('/apply', [
         message: 'Application submitted successfully',
         valeterId: valeterResult.rows[0].id
       });
-        valeterId: valeterResult.rows[0].id
-      });
 
     } catch (err) {
       await client.query('ROLLBACK');
