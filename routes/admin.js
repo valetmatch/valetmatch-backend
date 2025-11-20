@@ -120,7 +120,7 @@ router.get('/pending-valeters', verifyAdminToken, async (req, res) => {
     
     const result = await pool.query(
       `SELECT id, business_name, email, phone, postcode, 
-              services_offered, created_at
+              services, created_at
        FROM valeters 
        WHERE status = 'pending'
        ORDER BY created_at DESC`
@@ -132,7 +132,7 @@ router.get('/pending-valeters', verifyAdminToken, async (req, res) => {
       email: v.email,
       phone: v.phone,
       postcode: v.postcode,
-      services: v.services_offered || [],
+      services: v.services || [],
       createdAt: v.created_at
     }));
 
