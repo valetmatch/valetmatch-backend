@@ -34,49 +34,31 @@ router.post('/apply', [
       await client.query('BEGIN');
 
       // Check if email already exists
-      const existingUser = await client.query(
-        'SELECT id FROM users WHERE email = $1',
+      // Check if email already exists in valeters
+      const existingValeter = await client.query(
+        'SELECT id FROM valeters WHERE email = $1',
         [email]
       );
 
-      if (existingUser.rows.length > 0) {
+      if (existingValeter.rows.length > 0) {
         await client.query('ROLLBACK');
         return res.status(400).json({ error: 'Email already registered' });
       }
 
-      // Create user
-      const userResult = await client.query(
-        `INSERT INTO users (email, first_name, user_type, email_verified, is_active)
-         VALUES ($1, $2, 'valeter', false, true)
-         RETURNING id`,
-        [email, businessName]
-      );
-
-      const userId = userResult.rows[0].id;
-
-      // Create valeter profile
+      // Create valeter application
       const valeterResult = await client.query(
-        `INSERT INTO valeters (
-          user_id, business_name, postcode, 
-          offers_budget, offers_standard, offers_premium,
-          has_insurance, application_status
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
-        RETURNING id`,
-        [
-          userId,
-          businessName,
-          postcode.toUpperCase(),
-          services.includes('budget'),
-          services.includes('standard'),
-          services.includes('premium'),
-          insurance
-        ]
+        `INSERT INTO valeters (business_name, email, password_hash, phone, postcode, services_offered, insurance_verified, status)
+         VALUES ($1, $2, '', $3, $4, $5, $6, 'pending')
+         RETURNING id`,
+        [businessName, email, phone, postcode, servicesOffered, insurance]
       );
 
       await client.query('COMMIT');
 
       res.status(201).json({ 
         message: 'Application submitted successfully',
+        valeterId: valeterResult.rows[0].id
+      });
         valeterId: valeterResult.rows[0].id
       });
 
