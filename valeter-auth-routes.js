@@ -118,7 +118,7 @@ router.post('/login', async (req, res) => {
 
     // Get valeter with password hash
     const result = await pool.query(
-      `SELECT id, email, business_name, password_hash, status 
+      `SELECT id, email, business_name, password_hash, status, must_change_password 
        FROM valeters 
        WHERE email = $1`,
       [email.toLowerCase()]
