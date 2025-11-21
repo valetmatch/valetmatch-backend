@@ -18,7 +18,7 @@ router.get('/dashboard', async (req, res) => {
     // Get valeter profile
     const valeterResult = await pool.query(
       `SELECT id, business_name, email, phone, postcode, rating, total_reviews, 
-              services, created_at, last_login_at
+              services, created_at
        FROM valeters 
        WHERE id = $1`,
       [valeterId]
