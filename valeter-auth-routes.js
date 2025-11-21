@@ -164,7 +164,6 @@ router.post('/login', async (req, res) => {
         message: 'You must change your password before accessing your dashboard'
       });
     }
-    }
 
     // Last login tracking removed (column does not exist)
 
