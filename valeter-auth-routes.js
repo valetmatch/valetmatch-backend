@@ -48,7 +48,7 @@ router.post('/setup-password', async (req, res) => {
     const pool = req.app.locals.pool;
 
     // Verify token matches and hasn't expired
-    const result = await pool.query(
+    const result = await req.app.locals.pool.query(
       `SELECT id, business_name, status 
        FROM valeters 
        WHERE email = $1 
@@ -66,7 +66,7 @@ router.post('/setup-password', async (req, res) => {
     const password_hash = await bcrypt.hash(password, 10);
 
     // Update valeter with password and clear reset token
-    await pool.query(
+    await req.app.locals.pool.query(
       `UPDATE valeters 
        SET password_hash = $1, 
             
@@ -117,7 +117,7 @@ router.post('/login', async (req, res) => {
     const pool = req.app.locals.pool;
 
     // Get valeter with password hash
-    const result = await pool.query(
+    const result = await req.app.locals.pool.query(
       `SELECT id, email, business_name, password_hash, status, must_change_password 
        FROM valeters 
        WHERE email = $1`,
@@ -208,7 +208,7 @@ router.post('/request-reset', async (req, res) => {
     const pool = req.app.locals.pool;
 
     // Check if valeter exists
-    const result = await pool.query(
+    const result = await req.app.locals.pool.query(
       'SELECT id FROM valeters WHERE email = $1 AND status = \'active\'',
       [email.toLowerCase()]
     );
@@ -224,7 +224,7 @@ router.post('/request-reset', async (req, res) => {
     const resetToken = crypto.randomBytes(32).toString('hex');
     const expires = new Date(Date.now() + 3600000); // 1 hour
 
-    await pool.query(
+    await req.app.locals.pool.query(
       `UPDATE valeters 
        SET password_reset_token = $1, 
            password_reset_expires = $2 
@@ -250,7 +250,7 @@ router.get('/verify', verifyValeterToken, async (req, res) => {
   try {
     const pool = req.app.locals.pool;
     
-    const result = await pool.query(
+    const result = await req.app.locals.pool.query(
       'SELECT id, email, business_name, status FROM valeters WHERE id = $1',
       [req.valeterId]
     );
@@ -312,7 +312,7 @@ router.post('/change-password', async (req, res) => {
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
     // Update password and clear must_change_password flag
-    await pool.query(
+    await req.app.locals.pool.query(
       `UPDATE valeters 
        SET password_hash = $1, must_change_password = false 
        WHERE id = $2`,
