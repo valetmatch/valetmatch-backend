@@ -145,6 +145,7 @@ router.post('/login', async (req, res) => {
 
     if (!passwordMatch) {
       return res.status(401).json({ error: 'Invalid email or password' });
+    }
     // Check if password change is required
     if (valeter.must_change_password) {
       const changePasswordToken = jwt.sign(
