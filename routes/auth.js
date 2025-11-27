@@ -38,15 +38,25 @@ router.post('/login', async (req, res) => {
     }
 
 
-    // Return user data (without password)
+    // Generate JWT token
+    const token = jwt.sign(
+      { 
+        adminId: user.id,
+        email: user.email,
+        user_type: user.user_type
+      },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    // Return token and user data
     res.json({
       message: 'Login successful',
+      token: token,
       user: {
         id: user.id,
         email: user.email,
-        user_type: user.user_type,
-        first_name: user.first_name,
-        last_name: user.last_name
+        user_type: user.user_type
       }
     });
 
