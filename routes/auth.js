@@ -3,6 +3,8 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/database');
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const JWT_SECRET = process.env.JWT_SECRET || 'valetmatch-secret-key-2024';
 
 // Admin login
 router.post('/login', async (req, res) => {
